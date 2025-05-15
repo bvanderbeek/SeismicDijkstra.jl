@@ -8,16 +8,16 @@ using SeismicDijkstra
 # Data Files
 dlm = isspace # Data file delimiter (e.g., isspace, ",")
 # Events and Stations
-event_file = "example/data/evt_0N0E_SED_auto_HQ_MEDD.dat" # Event file
-station_file = "example/data/sta_0N0E_Station_Inventory_COSEISMIQ_ISOR_IMO_UNIQUE.dat" # Station file
+event_file = "data/events.dat" # Event file
+station_file = "data/stations.dat" # Station file
 j_id, j_lat, j_lon, j_elv = 1, 2, 3, 4 # Column numbers where ID, latitude, longitude, and elevation are found in above files
 tf_event_depth, tf_station_depth = true, false # Are events/station vertical coordinates defined as depth (true) or elevation (false)
 eid_type, sid_type = Int, Int # Are the event/station IDs integer- (Int) or string- (String) valued
 # Arrival times
-data_file = "example/data/uni_0N0E_tt_P_hengill_hq_hdi90_subset.dat" # Arrival time file
+data_file = "data/traveltimes_p.dat" # Arrival time file
 j_evt, j_sta, j_obs, j_phs = 1, 2, 3, 4 # Column numbers where event, station, observation, and phase are found in above files
 # 1D Velocity Model
-velocity_file = "example/data/vel1D_hengill_grigoli_35km.dat" # 1D velocity model file
+velocity_file = "data/velocity_1D.dat" # 1D velocity model file
 j_rad, j_vel = 1, 2 # Column numbers where radial coordinate and velocity are stored
 
 # Grid Parameters
