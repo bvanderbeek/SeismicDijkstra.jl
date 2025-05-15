@@ -1,5 +1,6 @@
 # Example: Compute travel-times from event, station, and arrival time files
 using SeismicDijkstra
+using Plots
 
 #########
 # INPUT #
@@ -42,27 +43,5 @@ r_neighbours = r_neighbours, leafsize = leafsize, grid_noise = grid_noise, R_ear
 # Run ray tracer
 tt_predicted = travel_times(G, Events, Stations, Data; R_earth = R_earth)
 
-
-
-
-# Compute delays
-Delays = deepcopy(Data)
-Delays.observation .-= tt_ref
-rdt, npe = compute_event_demeaned_delays(Delays, Events)
-
-# Source-receiver lengths anbd orientations
-L, azm, elv = zeros(size(Data.observation)), zeros(size(Data.observation)), zeros(size(Data.observation))
-for k in eachindex(Data.observation)
-    evt_id, sta_id = Data.event_id[k], Data.station_id[k]
-    ievt, jsta = Events.position[evt_id], Stations.position[sta_id]
-    zevt, xevt, yevt = global_cartesian_coordinates(Events.longitude[ievt], Events.latitude[ievt], Events.elevation[ievt]; R_earth = R_earth)
-    zsta, xsta, ysta = global_cartesian_coordinates(Stations.longitude[jsta], Stations.latitude[jsta], Stations.elevation[jsta]; R_earth = R_earth)
-    dx, dy, dz = xsta - xevt, ysta - yevt, zsta - zevt
-
-    L[k], azm[k], elv[k] = sqrt(dx^2 + dy^2 + dz^2), atand(dy,dx), atand(dz, sqrt(dx^2 + dy^2))
-end
-
-# writedlm(hcat(L, azm, elv, rdt))
-
-# Data.observation .= tt_ref .+ rdt
-# write_psi_s_observations("../input/uni_0N0E_tt_P_hengill_hq_hdi90_subset_demean.dat", Data, Events, Stations)
+# Plot residuals
+histogram(Data.observation .- tt_predicted)
