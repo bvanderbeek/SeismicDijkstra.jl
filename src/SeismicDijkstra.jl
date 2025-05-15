@@ -38,6 +38,8 @@ using NearestNeighbors
 include("utilities.jl")
 # include("IndexedMinPQ.jl") # ChatGPT Priority Queue
 
+export read_velocity_1D_file, read_aquisition_file, read_observation_file, make_graph, travel_times
+
 ##################
 ### STRUCTURES ###
 ##################
