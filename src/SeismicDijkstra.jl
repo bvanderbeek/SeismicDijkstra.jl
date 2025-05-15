@@ -30,9 +30,13 @@ module SeismicDijkstra
 # + Make sure *complete* type signatures are visible in structures
 # + Using @inbounds has appreciable effect on performance
 
-# include("IndexedMinPQ.jl") # ChatGPT Priority Queue
 using QuickHeaps
+using DelimitedFiles
+using Interpolations
 using NearestNeighbors
+
+include("utilities.jl")
+# include("IndexedMinPQ.jl") # ChatGPT Priority Queue
 
 ##################
 ### STRUCTURES ###
