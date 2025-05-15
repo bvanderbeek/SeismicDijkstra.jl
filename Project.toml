@@ -1,0 +1,8 @@
+name = "SeismicDijkstra"
+uuid = "7784e2a6-fddc-487f-ba3b-f62c786111aa"
+authors = ["bvanderbeek <brandon.p.vanderbeek@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+QuickHeaps = "30b38841-0f52-47f8-a5f8-18d5d4064379"
