@@ -1,5 +1,6 @@
 
 # Read simple event/station delimted file (id, latitude, longitude, elevation/depth)
+# ASSUMES RADIUS; DECREASING!!!
 function read_velocity_1D_file(velocity_file; order = (1,2), dlm = isspace)
     rad, vel = Vector{Float64}(), Vector{Float64}()
     j_rad, j_vel = order # Column indexing order
@@ -89,8 +90,8 @@ function make_graph(lon_grid, lat_grid, elv_grid, v1D; r_neighbours = 5, leafsiz
     lon_inc, lat_inc, elv_inc = step(lon_vec), step(lat_vec), step(elv_vec)
     dlon, dlat, delv = grid_noise*lon_inc, grid_noise*lat_inc, grid_noise*elv_inc
 
-    # Interpolation structure
-    vel_interp = linear_interpolation(v1D.r, v1D.v,extrapolation_bc=Flat())
+    # Interpolation structure (convert radius to depth to satisfy linear_interpolation increasing order assumption)
+    vel_interp = linear_interpolation(R_earth .- v1D.r, v1D.v,extrapolation_bc=Flat())
 
     # Fill graph
     num_vertices = lon_grid[3] * lat_grid[3] * elv_grid[3]
@@ -107,7 +108,7 @@ function make_graph(lon_grid, lat_grid, elv_grid, v1D; r_neighbours = 5, leafsiz
                 lon_ijk, lat_ijk, elv_ijk = lon_i + ddlon, lat_j + ddlat, elv_k + ddelv
                 x_ijk, y_ijk, z_ijk = global_cartesian_coordinates(lon_ijk, lat_ijk, elv_ijk; R_earth = R_earth)
                 # Compute slowness
-                v_ijk = vel_interp(elv_ijk + R_earth)
+                v_ijk = vel_interp(-elv_ijk) # Velocity interpolation function uses depth!
                 # Fill graph
                 xcoords[n], ycoords[n], zcoords[n], vert_weights[n] = x_ijk, y_ijk, z_ijk, 1.0/v_ijk
             end
@@ -122,6 +123,7 @@ end
 # Compute travel-times for every observation
 function travel_times(G, Events, Stations, Data; R_earth = 6371.0)
     unique_station_ids = unique(Data.station_id)
+    snum_station = string(length(unique_station_ids)) # For display purposes
     tt_predicted, npt = zeros(length(Data.observation)), 0
     for sid in unique_station_ids
         npt += 1
@@ -139,12 +141,12 @@ function travel_times(G, Events, Stations, Data; R_earth = 6371.0)
             if Data.station_id[k] == sid
                 ievt = Events.position[evt_k]
                 lon_evt, lat_evt, elv_evt = Events.longitude[ievt], Events.latitude[ievt], Events.elevation[ievt]
-                x_evt, y_evt, z_evt = global_cartesian_coordinates(lon_evt, lat_evt, elv_evt)
+                x_evt, y_evt, z_evt = global_cartesian_coordinates(lon_evt, lat_evt, elv_evt; R_earth = R_earth)
                 t_min, _ = get_nearest_connection(D, G, [x_evt, y_evt, z_evt])
                 tt_predicted[k] = t_min
             end
         end
-        println("Finished point " * string(npt) * " of 38.")
+        println("Finished point " * string(npt) * " of "*snum_station*".")
     end
     return tt_predicted
 end
