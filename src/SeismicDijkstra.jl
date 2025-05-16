@@ -341,20 +341,23 @@ end
 ##################
 
 # Analytic solution for travel-times in a 3D linear gradient velocity model
-function traveltimes_linear_gradient(x, x_0, v_0, g)
-    dxdx = sum((x .- x_0).^2)
-    v_x = v_0 + sum(g.*(x .- x_0))
-    s_x, s_0 = 1.0/v_x, 1.0/v_0
-    norm_g = sqrt(sum(g.^2))
-
-    return (1.0/norm_g)*acosh(1.0 + 0.5*s_x*s_0*(norm_g^2)*dxdx)
+function traveltimes_linear_gradient(x_1, x_2, x_0, v_0, g)
+    dxdx = sum((x_2 .- x_1).^2) # Distance-squared between point 1 and 2
+    if all(g .== 0.0)
+        tt = sqrt(dxdx)/v_0
+    else
+        norm_g = sqrt(sum(g.^2)) # Norm of velocity gradient
+        u_1 = 1.0/(v_0 + sum(g.*(x_1 .- x_0))) # Slowness at start coordinate
+        u_2 = 1.0/(v_0 + sum(g.*(x_2 .- x_0))) # Slowness at end coordinate
+        tt = (1.0/norm_g)*acosh(1.0 + 0.5*u_1*u_2*(norm_g^2)*dxdx)
+    end
+    return tt
 end
-# Convenience method for computing exact travel-times to graph vertices
-function traveltimes_linear_gradient(G::StructuredGraph3D, x_0, v_0, g)
+function traveltimes_linear_gradient(G::StructuredGraph3D, x_1, x_0, v_0, g)
     travel_times = zeros(G.nx, G.ny, G.nz)
     for n in 1:G.num_vertices
-        x_n = G.x[n], G.y[n], G.z[n]
-        travel_times[n] = traveltimes_linear_gradient(x_n, x_0, v_0, g)
+        x_2 = G.x[n], G.y[n], G.z[n]
+        travel_times[n] = traveltimes_linear_gradient(x_1, x_2, x_0, v_0, g)
     end
 
     return travel_times
@@ -368,7 +371,7 @@ end
 # 14.0903 s: 82 allocations: 44.170 MiB
 # -> Min., Max., Mean Error = -2.6e-12, 19.3, 3.8 ms
 function benchmark_structured_linear(; p_xyz = [0.0, 0.0, 0.0], min_xyz = (-5.0, -5.0, -10.0), max_xyz = (5.0, 5.0, 0.0),
-    n_xyz = (101, 101, 101), v_0 = 5.0, velocity_gradient = (0.0, 0.0, 0.0), grid_noise = 0.0,
+    n_xyz = (101, 101, 101), x_0 = [0.0, 0.0, 0.0], v_0 = 5.0, velocity_gradient = (0.0, 0.0, 0.0), grid_noise = 0.0,
     r_neighbours = 5, leafsize = 10, length_0 = 0.0, pred = 0)
 
     # Coordinate vectors
@@ -379,7 +382,7 @@ function benchmark_structured_linear(; p_xyz = [0.0, 0.0, 0.0], min_xyz = (-5.0,
 
     # Define coordinate arrays and vertex weights
     gx, gy, gz = velocity_gradient
-    x0, y0, z0 = p_xyz
+    x_ref, y_ref, z_ref = x_0
     num_vertices = prod(n_xyz)
     vert_weights = zeros(num_vertices)
     xcoords, ycoords, zcoords = zeros(num_vertices), zeros(num_vertices), zeros(num_vertices)
@@ -393,7 +396,7 @@ function benchmark_structured_linear(; p_xyz = [0.0, 0.0, 0.0], min_xyz = (-5.0,
                 ddx, ddy, ddz = grid_noise*x_inc*ddx, grid_noise*y_inc*ddy, grid_noise*z_inc*ddz
                 x_ijk, y_ijk, z_ijk = xi + ddx, yj + ddy, zk + ddz
                 # Compute velocity
-                dx, dy, dz = x_ijk - x0, y_ijk - y0, z_ijk - z0
+                dx, dy, dz = x_ijk - x_ref, y_ijk - y_ref, z_ijk - z_ref
                 v_ijk = v_0 + dx*gx + dy*gy + dz*gz
                 # Fill graph
                 xcoords[n], ycoords[n], zcoords[n] = x_ijk, y_ijk, z_ijk
@@ -413,16 +416,52 @@ function benchmark_structured_linear(; p_xyz = [0.0, 0.0, 0.0], min_xyz = (-5.0,
     tt_dijkstra = reshape(D.lengths, n_xyz)
 
     # Compute true velocity field
-    if all(velocity_gradient .== 0.0)
-        tt_true = zeros(G.num_vertices)
-        for n in 1:G.num_vertices
-            dx, dy, dz = G.x[n] - p_xyz[1], G.y[n] - p_xyz[2], G.z[n] - p_xyz[3]
-            tt_true[n] = sqrt(dx^2 + dy^2 + dz^2)/v_0
-        end
-    else
-        tt_true = traveltimes_linear_gradient(G, p_xyz, v_0, velocity_gradient)
-    end
+    tt_true = traveltimes_linear_gradient(G, p_xyz, x_0, v_0, velocity_gradient)
     tt_true = reshape(tt_true, n_xyz)
+
+    return tt_dijkstra, tt_true, G, D
+end
+function benchmark_structured_linear!(G::StructuredGraph3D, p_xyz; length_0 = 0.0, pred = 0)
+    # Compute linear gradient velocity model based on current graph weights
+    nx, ny, nz = size(G)
+    i_0, j_0, k_0 = 1 + round(Int, 0.5*nx), 1 + round(Int, 0.5*ny), 1 + round(Int, 0.5*nz)
+    # Origin
+    p_0 = linear_index(G, (i_0,j_0,k_0))
+    x_0, v_0 = (G.x[p_0], G.y[p_0], G.z[p_0]), 1.0/G.vert_weights[p_0]
+    # Velocity gradient in x-direction
+    px_1, px_2 = linear_index(G, (1,j_0,k_0)), linear_index(G, (nx,j_0,k_0))
+    gx = ((1.0/G.vert_weights[px_2]) - (1.0/G.vert_weights[px_1]))/(G.x[px_2] - G.x[px_1])
+    # Velocity gradient in y-direction
+    py_1, py_2 = linear_index(G, (i_0,1,k_0)), linear_index(G, (i_0,ny,k_0))
+    gy = ((1.0/G.vert_weights[py_2]) - (1.0/G.vert_weights[py_1]))/(G.y[py_2] - G.y[py_1])
+    # Velocity gradient in z-direction
+    pz_1, pz_2 = linear_index(G, (i_0,j_0,1)), linear_index(G, (i_0,j_0,nz))
+    gz = ((1.0/G.vert_weights[pz_2]) - (1.0/G.vert_weights[pz_1]))/(G.z[pz_2] - G.z[pz_1])
+    
+    return benchmark_structured_linear!(G, p_xyz, x_0, v_0, (gx, gy, gz); length_0 = 0.0, pred = 0)
+end
+function benchmark_structured_linear!(G::StructuredGraph3D, p_xyz, x_0, v_0, velocity_gradient; length_0 = 0.0, pred = 0)
+    # Update vertex weights with linear gradient velocity model
+    x_ref, y_ref, z_ref = x_0
+    gx, gy, gz = velocity_gradient
+    for n in 1:G.num_vertices
+        x_ijk, y_ijk, z_ijk = G.x[n], G.y[n], G.z[n]
+        dx, dy, dz = x_ijk - x_ref, y_ijk - y_ref, z_ijk - z_ref
+        v_ijk = v_0 + dx*gx + dy*gy + dz*gz
+        v_ijk <= 0.0 && @error "Negative or null velocities!"
+        G.vert_weights[n] = 1.0/v_ijk
+    end
+
+    # Initialise Dijkstra
+    D = initialize_dijkstra(G, p_xyz; length_0 = length_0, pred = pred)
+
+    # Call Dijkstra
+    @time dijkstra!(D, G)
+    tt_dijkstra = reshape(D.lengths, size(G))
+
+    # Compute true velocity field
+    tt_true = traveltimes_linear_gradient(G, p_xyz, x_0, v_0, velocity_gradient)
+    tt_true = reshape(tt_true, size(G))
 
     return tt_dijkstra, tt_true, G, D
 end
