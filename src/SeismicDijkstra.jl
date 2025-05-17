@@ -108,7 +108,7 @@ end
 function Base.getindex(V::Slowness, index...)
     return Velocity(V.u[index...])
 end
-function slowness(V::Slowness, r_xyz)
+function slowness(V::Slowness)
     return V.u
 end
 
@@ -119,25 +119,30 @@ end
 function Base.getindex(V::Velocity, index...)
     return Velocity(V.v[index...])
 end
-function slowness(V::Velocity, r_xyz)
+function slowness(V::Velocity)
     return 1.0/V.v
 end
 
 struct EllipticalVelocity{T} <: VertexParameters
     v_mean::T
     f::T
-    azm::T
-    elv::T
+    sx::T
+    sy::T
+    sz::T
+end
+function EllipticalVelocity(v_mean, f, azm, elv)
+    sx, sy, sz = unit_vector(azm, elv)
+    return EllipticalVelocity(v_mean, f, sx, sy, sz)
 end
 # Indexing
 function Base.getindex(V::EllipticalVelocity, index...)
-    return EllipticalVelocity(V.v_mean[index...], V.f[index...], V.azm[index...], V.elv[index...])
+    return EllipticalVelocity(V.v_mean[index...], V.f[index...], V.sx[index...], V.sy[index...], V.sz[index...])
 end
-function slowness(V::EllipticalVelocity, r_xyz)
-    sin_azm, cos_azm = sincos(V.azm)
-    sin_elv, cos_elv = sincos(V.elv)
-    cosθ = cos_elv*cos_azm*r_xyz[1] + cos_elv*sin_azm*r_xyz[2] + sin_elv*r_xyz[3]
-    return 1.0/(V.v_mean*(1.0 + 2.0*V.f*cosθ*cosθ - V.f))
+function slowness(V::EllipticalVelocity, (ux, uy, uz))
+    dv = V.f*V.v_mean
+    cosθ = V.sx*ux + V.sy*uy + V.sz*uz
+    vani = V.v_mean + 2.0*dv*cosθ*cosθ - dv
+    return 1.0/vani
 end
 
 ################
@@ -359,6 +364,17 @@ end
 function linear_index(ni::Int, ninj::Int, cart_index::NTuple{3, Int})
     i, j, k = cart_index
     return i + (j-1)*ni + (k-1)*ninj
+end
+
+function unit_vector(azm, elv)
+    sin_azm, cos_azm = sincos(azm)
+    sin_elv, cos_elv = sincos(elv)
+    return cos_elv*cos_azm, cos_elv*sin_azm, sin_elv
+end
+function unit_vector(azm::T, elv::T) where {T<:AbstractArray}
+    ux, uy, uz = zeros(size(azm)), zeros(size(azm)), zeros(size(azm))
+    [(ux[i], uy[i], uz[i]) = unit_vector(azm[i], elv[i]) for i in eachindex(azm)]
+    return ux, uy, uz
 end
 
 
