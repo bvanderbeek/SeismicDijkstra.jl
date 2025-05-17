@@ -59,7 +59,7 @@ end
 
 # Structured Graph: Vertices are organized in regular array but spacing varies with position
 # Neighbour indices (connectivity) is constant
-struct StructuredGraph3D{A<:AbstractArray,N,V<:AbstractArray,T}
+struct StructuredGraph3D{A<:AbstractArray,N,V,T}
     x::A
     y::A
     z::A
@@ -101,20 +101,43 @@ end
 # Use this to dispatch arc weight calculations
 # Alternatively, use custom functions and pass handles...not sure what will be cleaner
 abstract type VertexParameters end
+struct Slowness{T} <: VertexParameters
+    u::T
+end
+# Indexing
+function Base.getindex(V::Slowness, index...)
+    return Velocity(V.u[index...])
+end
+function slowness(V::Slowness, r_xyz)
+    return V.u
+end
+
 struct Velocity{T} <: VertexParameters
     v::T
 end
+# Indexing
+function Base.getindex(V::Velocity, index...)
+    return Velocity(V.v[index...])
+end
+function slowness(V::Velocity, r_xyz)
+    return 1.0/V.v
+end
+
 struct EllipticalVelocity{T} <: VertexParameters
     v_mean::T
     f::T
     azm::T
     elv::T
 end
-function propagation_velocity(v::EllipticalVelocity, r_xyz)
-    sin_azm, cos_azm = sincos(v.azm)
-    sin_elv, cos_elv = sincos(v.elv)
-    cosθcosθ = (cos_elv*cos_azm*r_xyz[1], cos_elv*sin_azm*r_xyz[2], sin_elv*r_xyz[3])^2
-    return v.v_mean*(1.0 + 2.0*v.f*cosθcosθ - v.f)
+# Indexing
+function Base.getindex(V::EllipticalVelocity, index...)
+    return EllipticalVelocity(V.v_mean[index...], V.f[index...], V.azm[index...], V.elv[index...])
+end
+function slowness(V::EllipticalVelocity, r_xyz)
+    sin_azm, cos_azm = sincos(V.azm)
+    sin_elv, cos_elv = sincos(V.elv)
+    cosθ = cos_elv*cos_azm*r_xyz[1] + cos_elv*sin_azm*r_xyz[2] + sin_elv*r_xyz[3]
+    return 1.0/(V.v_mean*(1.0 + 2.0*V.f*cosθ*cosθ - V.f))
 end
 
 ################
@@ -216,10 +239,13 @@ function arc_weight(q_weight::T, q_xyz, r_weight::T, r_xyz) where {T<:Elliptical
     dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
     dqr = sqrt(dx^2 + dy^2 + dz^2)
     if dqr > 0.0
-        n_xyz = r_xyz./dqr
-        v_q, v_r = propagation_velocity(q_weight, n_xyz), propagation_velocity(r_weight, n_xyz)
+        n_xyz = dx/dqr, dy/dqr, dz/dqr
+        u_q, u_r = slowness(q_weight, n_xyz), slowness(r_weight, n_xyz)
+        w = 0.5*(u_q + u_r)*dqr
+    else
+        w = 0.0
     end
-    return 2.0*dqr/(v_q + v_r)
+    return w
 end
 
 # Construct path starting from vertex q
@@ -422,6 +448,7 @@ function benchmark_structured_linear(; p_xyz = [0.0, 0.0, 0.0], min_xyz = (-5.0,
     return tt_dijkstra, tt_true, G, D
 end
 function benchmark_structured_linear!(G::StructuredGraph3D, p_xyz; length_0 = 0.0, pred = 0)
+    @warn "This may fail if grid was converted to cartesian from geographic..."
     # Compute linear gradient velocity model based on current graph weights
     nx, ny, nz = size(G)
     i_0, j_0, k_0 = 1 + round(Int, 0.5*nx), 1 + round(Int, 0.5*ny), 1 + round(Int, 0.5*nz)
