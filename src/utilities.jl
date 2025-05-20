@@ -151,10 +151,22 @@ function travel_times(G, Events, Stations, Data; R_earth = 6371.0)
     return tt_predicted
 end
 
-# Global cartesian coordinates
+# Global cartesian coordinates -- deprecate to use cartesian_to_spherical
 function global_cartesian_coordinates(lon, lat, elv; R_earth = R_earth)
     sinλ, cosλ = sincosd(lon)
     sinϕ, cosϕ = sincosd(lat)
     r = R_earth + elv
+    return r*cosϕ*cosλ, r*cosϕ*sinλ, r*sinϕ
+end
+
+function cartesian_to_spherical(x, y, z)
+    azm = atan(y,x)
+    elv = atan(z,sqrt(x^2 + y^2))
+    r = sqrt(x^2 + y^2 + z^2)
+    return azm, elv, r
+end
+function spherical_to_cartesian(azm, elv, r)
+    sinλ, cosλ = sincosd(azm)
+    sinϕ, cosϕ = sincosd(elv)
     return r*cosϕ*cosλ, r*cosϕ*sinλ, r*sinϕ
 end

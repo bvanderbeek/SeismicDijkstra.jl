@@ -36,6 +36,7 @@ using Interpolations
 using NearestNeighbors
 
 include("utilities.jl")
+include("phase_velocities.jl")
 # include("IndexedMinPQ.jl") # ChatGPT Priority Queue
 
 export read_velocity_1D_file, read_aquisition_file, read_observation_file, make_graph, travel_times
@@ -59,7 +60,7 @@ end
 
 # Structured Graph: Vertices are organized in regular array but spacing varies with position
 # Neighbour indices (connectivity) is constant
-struct StructuredGraph3D{A<:AbstractArray,N,V,T}
+struct StructuredGraph3D{A<:AbstractArray,V,N,T}
     x::A
     y::A
     z::A
@@ -97,65 +98,18 @@ function get_nearest_vertex(G::StructuredGraph3D, p_xyz)
     return q, q_ijk
 end
 
-# Types defining vertex parameters
-# Use this to dispatch arc weight calculations
-# Alternatively, use custom functions and pass handles...not sure what will be cleaner
-abstract type VertexParameters end
-struct Slowness{T} <: VertexParameters
-    u::T
-end
-# Indexing
-function Base.getindex(V::Slowness, index...)
-    return Velocity(V.u[index...])
-end
-function slowness(V::Slowness)
-    return V.u
-end
-
-struct Velocity{T} <: VertexParameters
-    v::T
-end
-# Indexing
-function Base.getindex(V::Velocity, index...)
-    return Velocity(V.v[index...])
-end
-function slowness(V::Velocity)
-    return 1.0/V.v
-end
-
-struct EllipticalVelocity{T} <: VertexParameters
-    v_mean::T
-    f::T
-    sx::T
-    sy::T
-    sz::T
-end
-function EllipticalVelocity(v_mean, f, azm, elv)
-    sx, sy, sz = unit_vector(azm, elv)
-    return EllipticalVelocity(v_mean, f, sx, sy, sz)
-end
-# Indexing
-function Base.getindex(V::EllipticalVelocity, index...)
-    return EllipticalVelocity(V.v_mean[index...], V.f[index...], V.sx[index...], V.sy[index...], V.sz[index...])
-end
-function slowness(V::EllipticalVelocity, (ux, uy, uz))
-    dv = V.f*V.v_mean
-    cosθ = V.sx*ux + V.sy*uy + V.sz*uz
-    vani = V.v_mean + 2.0*dv*cosθ*cosθ - dv
-    return 1.0/vani
-end
 
 ################
 ### DIJKSTRA ###
 ################
 
 # Initialize Dijkstra data structures for path calculations
-function initialize_dijkstra(G, p_xyz; length_0 = 0.0, pred = 0)
+function initialize_dijkstra(G, p_xyz; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
     D = DijkstraData(G.num_vertices)
-    initialize_dijkstra!(D, G, p_xyz; length_0 = length_0, pred = pred)
+    initialize_dijkstra!(D, G, p_xyz; phase = phase, length_0 = length_0, pred = pred)
     return D
 end
-function initialize_dijkstra!(D, G, p_xyz; length_0 = 0.0, pred = 0)
+function initialize_dijkstra!(D, G, p_xyz; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
     # Nearest vertex to initialization point
     q, q_ijk = get_nearest_vertex(G, p_xyz)
     q_weight = G.vert_weights[q]
@@ -163,7 +117,7 @@ function initialize_dijkstra!(D, G, p_xyz; length_0 = 0.0, pred = 0)
     # Evaluate length to nearest vertex
     if !D.distinguished[q]
         q_xyz = G.x[q], G.y[q], G.z[q]
-        length_pq = length_0 + arc_weight(q_weight, p_xyz, q_weight, q_xyz)
+        length_pq = length_0 + arc_weight(phase, q_weight, p_xyz, q_weight, q_xyz)
         if length_pq < D.lengths[q]
             D.Queue[q] = length_pq
             D.lengths[q] = length_pq
@@ -172,13 +126,13 @@ function initialize_dijkstra!(D, G, p_xyz; length_0 = 0.0, pred = 0)
     end
 
     # Compute neighbour lengths accounting for true initialisation point coordinate
-    evaluate_neighbours!(D, G, length_0, pred, q_ijk, p_xyz, q_weight)
+    evaluate_neighbours!(D, G, length_0, pred, q_ijk, p_xyz, q_weight; phase = phase)
 
     return nothing
 end
 
 # Main Dijkstra loop
-function dijkstra!(D, G)
+function dijkstra!(D, G; phase = UnspecifiedPhase())
     while !isempty(D.Queue)
         # Extract next minimum vertex
         q_min = dequeue!(D.Queue)
@@ -187,13 +141,13 @@ function dijkstra!(D, G)
         q_weight = G.vert_weights[q_min]
         # Update lengths to neighbours
         D.distinguished[q_min] = true
-        evaluate_neighbours!(D, G, D.lengths[q_min], q_min, q_ijk, q_xyz, q_weight)
+        evaluate_neighbours!(D, G, D.lengths[q_min], q_min, q_ijk, q_xyz, q_weight; phase = phase)
     end
     return nothing
 end
 
 # Compute lengths to neighbouring nodes (forward star evaluation)
-function evaluate_neighbours!(D, G, length_pq, q, q_ijk, q_xyz, q_weight)
+function evaluate_neighbours!(D, G, length_pq, q, q_ijk, q_xyz, q_weight; phase = UnspecifiedPhase())
     # Convenience variables
     nx, ny, nz = size(G)
     q_i, q_j, q_k = q_ijk
@@ -214,7 +168,7 @@ function evaluate_neighbours!(D, G, length_pq, q, q_ijk, q_xyz, q_weight)
 
                 # Check new path: length_pq + length_qr < length_pr ?
                 r_xyz = G.x[r], G.y[r], G.z[r]
-                length_pqr = length_pq + arc_weight(q_weight, q_xyz, G.vert_weights[r], r_xyz)
+                length_pqr = length_pq + arc_weight(phase, q_weight, q_xyz, G.vert_weights[r], r_xyz)
                 if length_pqr < D.lengths[r]
                     D.Queue[r] = length_pqr
                     D.lengths[r] = length_pqr
@@ -228,29 +182,37 @@ function evaluate_neighbours!(D, G, length_pq, q, q_ijk, q_xyz, q_weight)
 end
 
 # Collection of arc weight functions (i.e. how long does it take to travel a specific path)
-# Implement different arc weight functions for different vertex paramerisations
-# For anisotropic S-waves, we will need to pass polarization information...store in a phase field?
-function arc_weight(q_weight, q_xyz, r_weight, r_xyz)
+# Implement different arc weight functions for different vertex paramerisations and phases
+function arc_weight(P::SeismicPhase, q_weight, q_xyz, r_weight, r_xyz)
     dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
     dqr = sqrt(dx^2 + dy^2 + dz^2)
     return 0.5*(q_weight + r_weight)*dqr
 end
-function arc_weight(q_weight::T, q_xyz, r_weight::T, r_xyz) where {T<:Velocity}
-    dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
-    dqr = sqrt(dx^2 + dy^2 + dz^2)
-    return 2.0*dqr/(q_weight.v + r_weight.v)
-end
-function arc_weight(q_weight::T, q_xyz, r_weight::T, r_xyz) where {T<:EllipticalVelocity}
+function arc_weight(P::SeismicPhase, q_weight::T, q_xyz, r_weight::T, r_xyz) where {T<:EllipticalVelocity}
     dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
     dqr = sqrt(dx^2 + dy^2 + dz^2)
     if dqr > 0.0
         n_xyz = dx/dqr, dy/dqr, dz/dqr
-        u_q, u_r = slowness(q_weight, n_xyz), slowness(r_weight, n_xyz)
+        u_q, u_r = phase_velocity(q_weight, n_xyz), phase_velocity(r_weight, n_xyz)
+        u_q, u_r = 1.0/u_q, 1.0/u_r
         w = 0.5*(u_q + u_r)*dqr
     else
         w = 0.0
     end
+
+    # Compute velocities using angles...much slower
+    # dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
+    # ray_azm, ray_elv, ray_len = cartesian_to_spherical(dx, dy, dz)
+    # u_q, u_r = phase_velocity(q_weight, ray_azm, ray_elv), phase_velocity(r_weight, ray_azm, ray_elv)
+    # u_q, u_r = 1.0/u_q, 1.0/u_r
+    # w = 0.5*(u_q + u_r)*ray_len
     return w
+end
+function arc_weight(P::SeismicPhase, q_weight::T, q_xyz, r_weight::T, r_xyz) where {T<:ThomsenVelocity}
+    dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
+    ray_azm, ray_elv, ray_len = cartesian_to_spherical(dx, dy, dz)
+    vq, vr = phase_velocity(P, q_weight, ray_azm, ray_elv), phase_velocity(P, r_weight, ray_azm, ray_elv)
+    return 2.0*ray_len/(vq + vr)
 end
 
 # Construct path starting from vertex q
@@ -297,7 +259,7 @@ function get_path(D, G, xyz_start, xyz_end; length_0 = 0.0)
 end
 
 # Returns shortest connection from an arbitrary point to a graph vertex
-function get_nearest_connection(D, G, p_xyz)
+function get_nearest_connection(D, G, p_xyz; phase = UnspecifiedPhase())
     nx, ny, nz = size(G)
     # Locate nearest vertex to point p_xyz
     q, (q_i, q_j, q_k) = get_nearest_vertex(G, p_xyz)
@@ -305,7 +267,7 @@ function get_nearest_connection(D, G, p_xyz)
     q_weight = G.vert_weights[q]
 
     # Locate shortest connection to point p_xyz
-    min_length, r_min = D.lengths[q] + arc_weight(q_weight, p_xyz, q_weight, q_xyz), q
+    min_length, r_min = D.lengths[q] + arc_weight(phase, q_weight, p_xyz, q_weight, q_xyz), q
     if p_xyz != q_xyz # Search neighbours if p_xyz is not a vertex
         n_i, n_j, n_k = G.forward_star
         @inbounds for dk in n_k
@@ -321,7 +283,7 @@ function get_nearest_connection(D, G, p_xyz)
                     # Check new path
                     r = linear_index(G, (r_i, r_j, r_k))
                     r_xyz = G.x[r], G.y[r], G.z[r]
-                    length_pr = D.lengths[r] + arc_weight(q_weight, p_xyz, G.vert_weights[r], r_xyz)
+                    length_pr = D.lengths[r] + arc_weight(phase, q_weight, p_xyz, G.vert_weights[r], r_xyz)
                     if length_pr < min_length
                         min_length, r_min = length_pr, r
                     end
@@ -408,7 +370,7 @@ end
 # Dijkstra execution time (via @time)
 # Average of 5 runs using default parameters after compilation
 # 10.1115 s; 5 allocations: 3.612 MiB
-# -> Min., Max., Mean Error = -2.0e-12, 19.3, 3.8 ms
+# -> Min., Max., Mean Error = -2.0e-15, 19.3, 3.8 ms
 # Original PSI_S implementation (SeismicDijkstra is ~27% faster)
 # 14.0903 s: 82 allocations: 44.170 MiB
 # -> Min., Max., Mean Error = -2.6e-12, 19.3, 3.8 ms
