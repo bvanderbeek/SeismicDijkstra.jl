@@ -46,17 +46,28 @@ export read_velocity_1D_file, read_aquisition_file, read_observation_file, make_
 ##################
 
 # Dijkstra Data: Stores the main Dijkstra algorithm data structures
-struct DijkstraData{Q, L<:Vector, P<:Vector, B<:BitArray} # PriorityQueue Type in signature; needs to be known at compile time for good performance!
+struct DijkstraData{Q, S, L<:Vector, P<:Vector, B<:BitArray} # PriorityQueue Type in signature; needs to be known at compile time for good performance!
     Queue::Q # Priority Queue
     lengths::L # Objective function 
     predecessors::P # Previous vertex/next vertex in path
     distinguished::B # Visited vertices
+    source::S # Store initialization type (e.g. point source, interface source, exploding reflector)
 end
-function DijkstraData(num_vertices)
+function DijkstraData(num_vertices, source)
     # Q = IndexedMinPQ{Float64}(num_vertices) # ChatGPT Priority Queue
     Q = FastPriorityQueue{Float64}(num_vertices)
-    return DijkstraData(Q, fill(Inf, num_vertices), zeros(Int, num_vertices), falses(num_vertices))
+    P = PointSource(source...)
+    return DijkstraData(Q, fill(Inf, num_vertices), zeros(Int, num_vertices), falses(num_vertices), P)
 end
+
+abstract type SourceType end
+struct PointSource{T} <: SourceType
+    x::T
+    y::T
+    z::T
+end
+struct ExplodingReflector <: SourceType end
+struct PlaneWave <: SourceType end
 
 # Structured Graph: Vertices are organized in regular array but spacing varies with position
 # Neighbour indices (connectivity) is constant
@@ -105,12 +116,13 @@ end
 
 # Initialize Dijkstra data structures for path calculations
 function initialize_dijkstra(G, p_xyz; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
-    D = DijkstraData(G.num_vertices)
-    initialize_dijkstra!(D, G, p_xyz; phase = phase, length_0 = length_0, pred = pred)
+    D = DijkstraData(G.num_vertices, p_xyz)
+    initialize_dijkstra!(D, G; phase = phase, length_0 = length_0, pred = pred)
     return D
 end
-function initialize_dijkstra!(D, G, p_xyz; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
+function initialize_dijkstra!(D, G; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
     # Nearest vertex to initialization point
+    p_xyz = [D.source.x, D.source.y, D.source.z] # Must be vector
     q, q_ijk = get_nearest_vertex(G, p_xyz)
     q_weight = G.vert_weights[q]
 
@@ -226,9 +238,10 @@ function get_path(D, q)
 end
 
 # Construct path between two arbitrary points in graph (do not need to be vertices)
-# The initialisation point (xyz_end) should really be stored in the graph to avoid confusion
-function get_path(D, G, xyz_start, xyz_end; length_0 = 0.0)
-    # Locate nearest vertex to desired path start point 
+function get_path(D, G, xyz_start; length_0 = 0.0)
+    # Get end point (i.e. source initialisation point)
+    xyz_end = D.source.x, D.source.y, D.source.z
+    # Locate nearest vertex to desired path start point
     min_length, r_min = get_nearest_connection(D, G, xyz_start)
     min_length += length_0
 
