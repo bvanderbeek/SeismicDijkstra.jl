@@ -115,6 +115,7 @@ end
 ################
 
 # Initialize Dijkstra data structures for path calculations
+# Eventually there will be different initialization functions foor different source types (e.g. reflections)
 function initialize_dijkstra(G, p_xyz; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
     D = DijkstraData(G.num_vertices, p_xyz)
     initialize_dijkstra!(D, G; phase = phase, length_0 = length_0, pred = pred)
@@ -269,6 +270,36 @@ function get_path(D, G, xyz_start; length_0 = 0.0)
     end
 
     return min_length, xyz_path, vert_path
+end
+
+function refine_path(xyz_path, dr, min_vert)
+
+    # Compute path length 
+    num_seg = size(xyz_path, 2) - 1
+    len_path = zeros(size(xyz_path, 2))
+    @views x, y, z = xyz_path[1,:], xyz_path[2,:], xyz_path[3,:]
+    for i in 1:num_seg
+        j = i + 1
+        dx_i, dy_i, dz_i = x[j] - x[i], y[j] - y[i], z[j] - z[i]
+        len_path[j] = len_path[i] + sqrt(dx_i^2 + dy_i^2 + dz_i^2)
+    end
+    total_length = len_path[end]
+
+    # Create path interpolants
+    itpx = linear_interpolation(len_path, x)
+    itpy = linear_interpolation(len_path, y)
+    itpz = linear_interpolation(len_path, z)
+
+    # Re-interpolate path
+    num_vert = max(1 + round(Int, total_length/dr), min_vert)
+    fine_path = zeros(3, num_vert)
+    rq = range(start = 0.0, stop = total_length, length = num_vert)
+    @views xq, yq, zq = fine_path[1,:], fine_path[2,:], fine_path[3,:]
+    [xq[k] = itpx(rq_k) for (k, rq_k) in enumerate(rq)]
+    [yq[k] = itpy(rq_k) for (k, rq_k) in enumerate(rq)]
+    [zq[k] = itpz(rq_k) for (k, rq_k) in enumerate(rq)]
+
+    return fine_path
 end
 
 # Returns shortest connection from an arbitrary point to a graph vertex
