@@ -231,7 +231,7 @@ function arc_weight(P::SeismicPhase, q_weight::T, q_xyz, r_weight::T, r_xyz) whe
     dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
     dqr = sqrt(dx^2 + dy^2 + dz^2)
     vq, vr = phase_velocity(P, q_weight), phase_velocity(P, r_weight)
-    return 2.0*dqr(vq + vr)
+    return 2.0*dqr/(vq + vr)
 end
 function arc_weight(P::SeismicPhase, q_weight::T, q_xyz, r_weight::T, r_xyz) where {T<:ThomsenVelocity}
     dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
