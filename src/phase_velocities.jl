@@ -1,7 +1,11 @@
 # Phase Velocities
 # This may make a nice stand-alone package to collect different velocity parameterisations and convert between them
+# As a semantic point, maybe better to have a phase_speed function that returns only propagation speed and phase_velocity
+# function that returns both speed and polarisation.
 
 # Seismic Phase Types -- Used to dispatch on velocity calculations
+
+# Refractions, Reflections, Conversions (can be either refracted or reflected arrivals)
 abstract type SeismicPhase end
 struct UnspecifiedPhase <: SeismicPhase end
 struct BodyP <: SeismicPhase end
@@ -10,6 +14,7 @@ struct BodyS{T} <: SeismicPhase
 end
 struct BodySfast <: SeismicPhase end
 struct BodySslow <: SeismicPhase end
+struct BodySmean <: SeismicPhase end
 
 # Isotropic Velocity
 struct IsotropicVelocity{T}
@@ -22,10 +27,13 @@ end
 function phase_velocity(V::IsotropicVelocity)
     return V.vp, V.vs
 end
-function phase_velocity(P::BodyP, V::IsotropicVelocity)
+function phase_velocity(::BodyP, V::IsotropicVelocity)
     return V.vp
 end
-function phase_velocity(P::BodyS, V::IsotropicVelocity)
+function phase_velocity(::BodyS, V::IsotropicVelocity)
+    return V.vs
+end
+function phase_velocity(::BodySmean, V::IsotropicVelocity)
     return V.vs
 end
 
@@ -102,8 +110,8 @@ function phase_velocity(P::BodyS, V::ThomsenVelocity, propagation_azimuth, propa
     us = uqs2 - (uqs2 - uqs1)*(cos(ζ)^2)
     return 1.0/us
 end
-function phase_velocity(P::BodySfast, V::ThomsenVelocity, propagation_azimuth, propagation_elevation)
-    cosθ, ζ = symmetry_axis_cosine(V.azm, V.elv, propagation_azimuth, propagation_elevation, P.pazm)
+function phase_velocity(::BodySfast, V::ThomsenVelocity, propagation_azimuth, propagation_elevation)
+    cosθ = symmetry_axis_cosine(V.azm, V.elv, propagation_azimuth, propagation_elevation)
     cosθ_2 = cosθ^2
     sinθ_2 = 1.0 - cosθ_2
     q_αβ = V.alpha/V.beta
@@ -111,14 +119,23 @@ function phase_velocity(P::BodySfast, V::ThomsenVelocity, propagation_azimuth, p
     vqs2 = V.beta*sqrt( 1.0 + 2.0*V.gamma*sinθ_2 )
     return max(vqs1, vqs2)
 end
-function phase_velocity(P::BodySslow, V::ThomsenVelocity, propagation_azimuth, propagation_elevation)
-    cosθ, ζ = symmetry_axis_cosine(V.azm, V.elv, propagation_azimuth, propagation_elevation)
+function phase_velocity(::BodySslow, V::ThomsenVelocity, propagation_azimuth, propagation_elevation)
+    cosθ = symmetry_axis_cosine(V.azm, V.elv, propagation_azimuth, propagation_elevation)
     cosθ_2 = cosθ^2
     sinθ_2 = 1.0 - cosθ_2
     q_αβ = V.alpha/V.beta
     vqs1 = V.beta*sqrt( 1.0 + 2.0*(q_αβ^2)*(V.epsilon - V.delta)*sinθ_2*cosθ_2 )
     vqs2 = V.beta*sqrt( 1.0 + 2.0*V.gamma*sinθ_2 )
     return min(vqs1, vqs2)
+end
+function phase_velocity(::BodySmean, V::ThomsenVelocity, propagation_azimuth, propagation_elevation)
+    cosθ = symmetry_axis_cosine(V.azm, V.elv, propagation_azimuth, propagation_elevation)
+    cosθ_2 = cosθ^2
+    sinθ_2 = 1.0 - cosθ_2
+    q_αβ = V.alpha/V.beta
+    vqs1 = V.beta*sqrt( 1.0 + 2.0*(q_αβ^2)*(V.epsilon - V.delta)*sinθ_2*cosθ_2 )
+    vqs2 = V.beta*sqrt( 1.0 + 2.0*V.gamma*sinθ_2 )
+    return 0.5*(vqs1 + vqs2)
 end
 
 #############
