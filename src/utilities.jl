@@ -91,7 +91,7 @@ function make_graph(lon_grid, lat_grid, elv_grid, v1D; r_neighbours = 5, leafsiz
     dlon, dlat, delv = grid_noise*lon_inc, grid_noise*lat_inc, grid_noise*elv_inc
 
     # Interpolation structure (convert radius to depth to satisfy linear_interpolation increasing order assumption)
-    vel_interp = linear_interpolation(R_earth .- v1D.r, v1D.v,extrapolation_bc=Flat())
+    vel_interp = linear_interpolation(R_earth .- v1D.r, v1D.v, extrapolation_bc=Flat())
 
     # Fill graph
     num_vertices = lon_grid[3] * lat_grid[3] * elv_grid[3]

@@ -4,6 +4,7 @@ module SeismicDijkstra
 
 # To-do List
 # + How to handle different phases? (P, S, S-slow, S-fast, PmP)
+# -> Refractions, Reflections; Single, Multi-leg; Direct, Indirect
 # -> Either graph parameters are phase specific or we include a phase parameter
 # + Spherical Bullen gradient benchmark
 # + Add elevation
@@ -115,9 +116,14 @@ end
 ################
 
 # Initialize Dijkstra data structures for path calculations
-# Eventually there will be different initialization functions foor different source types (e.g. reflections)
+# Eventually there will be different initialization functions for different source types (e.g. reflections)
 function initialize_dijkstra(G, p_xyz; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
     D = DijkstraData(G.num_vertices, p_xyz)
+    # # Exclude vertices above surface (if defined) -- ASSUMES Z COORDINATE IS ELEVATION...NOT TRUE FOR GLOBAL CARTESIAN
+    # if haskey(G.interfaces, "surface")
+    #     for j in axes(G.interfaces["surface"]), i in axes(G.interfaces["surface"])
+    #     end
+    # end
     initialize_dijkstra!(D, G; phase = phase, length_0 = length_0, pred = pred)
     return D
 end
@@ -238,7 +244,7 @@ function get_path(D, q)
     return path
 end
 
-# Construct path between two arbitrary points in graph (do not need to be vertices)
+# Construct path from arbitary point to initialization point (neither of which must coincide with graph vertex)
 function get_path(D, G, xyz_start; length_0 = 0.0)
     # Get end point (i.e. source initialisation point)
     xyz_end = D.source.x, D.source.y, D.source.z
@@ -272,7 +278,7 @@ function get_path(D, G, xyz_start; length_0 = 0.0)
     return min_length, xyz_path, vert_path
 end
 
-function refine_path(xyz_path, dr, min_vert)
+function refine_path(xyz_path, dr; min_vert = 2)
 
     # Compute path length 
     num_seg = size(xyz_path, 2) - 1
