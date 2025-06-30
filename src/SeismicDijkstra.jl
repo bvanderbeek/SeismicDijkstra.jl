@@ -245,11 +245,11 @@ function get_path(D, q)
 end
 
 # Construct path from arbitary point to initialization point (neither of which must coincide with graph vertex)
-function get_path(D, G, xyz_start; length_0 = 0.0)
+function get_path(D, G, xyz_start; phase = UnspecifiedPhase(), length_0 = 0.0)
     # Get end point (i.e. source initialisation point)
     xyz_end = D.source.x, D.source.y, D.source.z
     # Locate nearest vertex to desired path start point
-    min_length, r_min = get_nearest_connection(D, G, xyz_start)
+    min_length, r_min = get_nearest_connection(D, G, xyz_start; phase = phase)
     min_length += length_0
 
     # Construct vertex path
