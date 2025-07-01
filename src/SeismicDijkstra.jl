@@ -313,6 +313,21 @@ function refine_path(xyz_path, dr; min_vert = 2)
 
     return fine_path
 end
+function refine_path(G, xyz_path, dr; phase = UnspecifiedPhase(), dist = 0.0, min_vert = 2)
+    # Construct resampled path
+    fine_path = refine_path(xyz_path, dr; min_vert = min_vert)
+    # Re-integrate weights
+    nvert = size(fine_path, 2)
+    for i in 1:(nvert-1)
+        xyz_q, xyz_r = @views fine_path[:,i], fine_path[:,i+1]
+        q, _ = nn(G.NNTree, xyz_q)
+        r, _ = nn(G.NNTree, xyz_r)
+        weight_q, weight_r = G.vert_weights[q], G.vert_weights[r]
+        dist += arc_weight(phase, weight_q, xyz_q, weight_r, xyz_r)
+    end
+
+    return dist, fine_path
+end
 
 # Returns shortest connection from an arbitrary point to a graph vertex
 function get_nearest_connection(D, G, p_xyz; phase = UnspecifiedPhase())
