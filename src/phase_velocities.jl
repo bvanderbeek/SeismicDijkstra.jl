@@ -142,6 +142,28 @@ end
 # UTILITIES #
 #############
 
+# Interpolate array weights
+function interpolate_vert_weights(x::LinRange, y::LinRange, z::LinRange, vert_weights::Array,
+    xq::Array, yq::Array, zq::Array)
+    # Construct an interpolant with nearest-boundary value extrapolation
+    itp = extrapolate(interpolate((x,y,z), vert_weights, Gridded(Linear())), Flat())
+    # Interpolate weights
+    intp_weights = zeros(size(xq))
+    [intp_weights[i] = itp(xq[i], yq[i], zq[i]) for i in eachindex(intp_weights)]
+    return intp_weights
+end
+# May be type unstable...but prioritizing for convenience at the moment
+function interpolate_vert_weights(x::LinRange, y::LinRange, z::LinRange, vert_weights,
+    xq::Array, yq::Array, zq::Array)
+    new_weights = deepcopy(vert_weights)
+    flds = fieldnames(typeof(vert_weights))
+    for f_i in flds
+        v_f = getfield(new_weights, f_i)
+        v_f .= interpolate_vert_weights(x, y, z, getfield(vert_weights, f_i), xq, yq, zq)
+    end
+    return new_weights
+end
+
 function symmetry_axis_cosine(symmetry_azimuth, symmetry_elevation, propagation_azimuth, propagation_elevation)
     cosΔλ = cos(propagation_azimuth - symmetry_azimuth) 
     sinϕp, cosϕp = sincos(propagation_elevation)
