@@ -35,12 +35,14 @@ using QuickHeaps
 using DelimitedFiles
 using Interpolations
 using NearestNeighbors
+using StaticArrays
+using WriteVTK
 
 include("utilities.jl")
 include("phase_velocities.jl")
 # include("IndexedMinPQ.jl") # ChatGPT Priority Queue
 
-export read_velocity_1D_file, read_aquisition_file, read_observation_file, make_graph, travel_times
+export load_velocity_1D_file, load_aquisition_file, load_observation_file, make_graph, travel_times
 
 ##################
 ### STRUCTURES ###
@@ -72,6 +74,7 @@ struct PlaneWave <: SourceType end
 
 # Structured Graph: Vertices are organized in regular array but spacing varies with position
 # Neighbour indices (connectivity) is constant
+# Better to just put dimensions in type signature?
 struct StructuredGraph3D{A<:AbstractArray,V,N,T}
     x::A
     y::A
@@ -84,6 +87,26 @@ struct StructuredGraph3D{A<:AbstractArray,V,N,T}
     vert_weights::V
     num_vertices::Int
     num_vertices_xy::Int
+end
+# Build structured graph from regular weight arrays
+function StructuredGraph3D(x1::LinRange, x2::LinRange, x3::LinRange, vert_weights;
+    grid_noise = 0.0, grid_coords = (a,b,c) -> (a,b,c),
+    neighbours = 5, leafsize = 10)
+    nx1, nx2, nx3 = length(x1), length(x2), length(x3)
+    dx1, dx2, dx3 = grid_noise*step(x1), grid_noise*step(x2), grid_noise*step(x3)
+    xg, yg, zg = zeros(nx1, nx2, nx3), zeros(nx1, nx2, nx3), zeros(nx1, nx2, nx3)
+    for (k, x3_k) in enumerate(x3), (j, x2_j) in enumerate(x2), (i, x1_i) in enumerate(x1)
+        # Define (optional) noisy coordinate arrays
+        ddx1, ddx2, ddx3 = (2.0*rand() - 1.0)*dx1, (2.0*rand() - 1.0)*dx2, (2.0*rand() - 1.0)*dx3
+        xg[i,j,k], yg[i,j,k], zg[i,j,k] = x1_i + ddx1, x2_j + ddx2, x3_k + ddx3
+    end
+    # Re-interpolate vertex weights (do before coordinate system conversion!)
+    # Creates new weight array (do not want to overwrite inputs)
+    new_weights = interpolate_vert_weights(x1, x2, x3, vert_weights, xg, yg, zg)
+    # Apply (optional) conversion to cartesian coordinates
+    [(xg[ind], yg[ind], zg[ind]) = grid_coords(xg[ind], yg[ind], zg[ind]) for ind in eachindex(xg)]
+
+    return StructuredGraph3D(xg, yg, zg, (nx1, nx2, nx3), new_weights; r_neighbours = neighbours, leafsize = leafsize)
 end
 function StructuredGraph3D(x, y, z, n_xyz, vert_weights; r_neighbours = 5, leafsize = 10)
     # Build nearest neighbours interpolation tree...to simplify locating points inside graph
@@ -202,7 +225,7 @@ end
 
 # Collection of arc weight functions (i.e. how long does it take to travel a specific path)
 # Implement different arc weight functions for different vertex paramerisations and phases
-function arc_weight(P::SeismicPhase, q_weight, q_xyz, r_weight, r_xyz)
+function arc_weight(::SeismicPhase, q_weight, q_xyz, r_weight, r_xyz)
     dx, dy, dz = r_xyz[1] - q_xyz[1], r_xyz[2] - q_xyz[2], r_xyz[3] - q_xyz[3]
     dqr = sqrt(dx^2 + dy^2 + dz^2)
     return 0.5*(q_weight + r_weight)*dqr
@@ -408,6 +431,22 @@ function unit_vector(azm::T, elv::T) where {T<:AbstractArray}
     ux, uy, uz = zeros(size(azm)), zeros(size(azm)), zeros(size(azm))
     [(ux[i], uy[i], uz[i]) = unit_vector(azm[i], elv[i]) for i in eachindex(azm)]
     return ux, uy, uz
+end
+
+function write_vert_weights_to_vts(output_file, xg, yg, zg, vert_weights::Array)
+    vtk_grid(output_file, xg, yg, zg) do vtk
+        vtk["weights"] = vert_weights
+    end
+    return nothing
+end
+function write_vert_weights_to_vts(output_file, xg, yg, zg, vert_weights)
+    flds = fieldnames(typeof(vert_weights))
+    vtk_grid(output_file, xg, yg, zg) do vtk
+        for f_i in flds
+            vtk[string(f_i)] = getfield(vert_weights, f_i)
+        end
+    end
+    return nothing
 end
 
 

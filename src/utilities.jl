@@ -1,12 +1,12 @@
 
 # Read simple event/station delimted file (id, latitude, longitude, elevation/depth)
 # ASSUMES RADIUS; DECREASING!!!
-function read_velocity_1D_file(velocity_file; order = (1,2), dlm = isspace)
+function load_velocity_1D_file(velocity_file; order = (1,2), dlm = isspace)
     rad, vel = Vector{Float64}(), Vector{Float64}()
     j_rad, j_vel = order # Column indexing order
 
     # Loop over lines in data file
-    k, nline, num_col = 0, 0, maximum(order)
+    nline, num_col = 0, maximum(order)
     for line in readlines(velocity_file)
         nline += 1
         line = split(line, dlm; keepempty = false)
@@ -22,7 +22,7 @@ function read_velocity_1D_file(velocity_file; order = (1,2), dlm = isspace)
 end
 
 # Read simple event/station delimted file (id, latitude, longitude, elevation/depth)
-function read_aquisition_file(aquisition_file; id_type = Int, order = (1,2,3,4), tf_depth = false, dlm = isspace)
+function load_aquisition_file(aquisition_file; id_type = Int, order = (1,2,3,4), tf_depth = false, dlm = isspace)
     tf_string_id = id_type == String # Treat IDs as Strings?
     position = Dict{id_type, Int}() # Dictionary to index of specific ID
     id, lat, lon, elv = Vector{id_type}(), Vector{Float64}(), Vector{Float64}(), Vector{Float64}()
@@ -53,7 +53,7 @@ function read_aquisition_file(aquisition_file; id_type = Int, order = (1,2,3,4),
 end
 
 # Read simple observation delimited file (event id, station id, observation, phase)
-function read_observation_file(observation_file; eid_type = Int, sid_type = String, order = (1,2,3,4), dlm = isspace)
+function load_observation_file(observation_file; eid_type = Int, sid_type = String, order = (1,2,3,4), dlm = isspace)
     tf_string_event_id = eid_type == String # Treat event IDs as Strings?
     tf_string_station_id = sid_type == String # Treat station IDs as Strings?
     evt_id, sta_id, b, phs = Vector{eid_type}(), Vector{sid_type}(), Vector{Float64}(), Vector{String}()
@@ -79,6 +79,140 @@ function read_observation_file(observation_file; eid_type = Int, sid_type = Stri
 
     return (event_id = evt_id, station_id = sta_id, observation = b, phase = phs) # Returns NamedTuple
 end
+
+# Dictionary of initialisation indices (keys) and the observation and destination indices (values)
+# This could be generalized better to also create start/end point lists
+function build_itinerary(Paths, Sources, Receivers)
+    
+    src_init = Dict{Int, Vector{NTuple{2, Int}}}()
+    [src_init[Sources.position[evt_i]] = Vector{NTuple{2, Int}}() for evt_i in Paths.event_id]
+    for (k, sta_j) in enumerate(Paths.station_id)
+        evt_i = Paths.event_id[k]
+        push!(src_init[Sources.position[evt_i]], (k, Receivers.position[sta_j]))
+    end
+
+    rcv_init = Dict{Int, Vector{NTuple{2, Int}}}()
+    [rcv_init[Receivers.position[sta_j]] = Vector{NTuple{2, Int}}() for sta_j in Paths.station_id]
+    for (k, evt_i) in enumerate(Paths.event_id)
+        sta_j = Paths.station_id[k]
+        push!(rcv_init[Receivers.position[sta_j]], (k, Sources.position[evt_i]))
+    end
+
+    itinerary, tf_reverse = length(rcv_init) < length(src_init) ? (rcv_init, true) : (src_init, false)
+
+    return itinerary, tf_reverse
+end
+
+# Consider wrapping this into build_itinerary.
+# Need to consider coordinate systems.
+function collect_start_end_points(Data, Events, Stations; R_earth = 6371.0)
+    # Build shortest path itinerary
+    itinerary, tf_reverse = SeismicDijkstra.build_itinerary(Data, Events, Stations)
+    # Collect source coordinates
+    src_points = Vector{NTuple{3, Float64}}(undef, length(Events.id))
+    for i in eachindex(Events.id)
+        lon_i, lat_i, elv_i = Events.longitude[i], Events.latitude[i], Events.elevation[i]
+        src_points[i] = SeismicDijkstra.global_cartesian_coordinates(lon_i, lat_i, elv_i; R_earth = R_earth)
+    end
+    # Collect the receiver coordinates
+    rcv_points = Vector{NTuple{3, Float64}}(undef, length(Stations.id))
+    for j in eachindex(Stations.id)
+        lon_j, lat_j, elv_j = Stations.longitude[j], Stations.latitude[j], Stations.elevation[j]
+        rcv_points[j] = SeismicDijkstra.global_cartesian_coordinates(lon_j, lat_j, elv_j; R_earth = R_earth)
+    end
+    # Select fewest points as the initialization points for Dijkstra
+    start_points, end_points = tf_reverse ? (rcv_points, src_points) : (src_points, rcv_points)
+
+    return itinerary, start_points, end_points, tf_reverse
+end
+
+# Example function for computing times with optional re-integration of ray path.
+# Needs to be generalized. Assumes isotropic graph, 
+function compute_times(G, Data, Events, Stations; phase = UnspecifiedPhase(),
+    dl = 0.0, min_vert = 2, length_0 = 0.0, pred = 0, R_earth = 6371.0)
+
+    # Build itinerary of paths that need to be computed
+    itinerary, start_points, end_points, tf_reverse = collect_start_end_points(Data, Events, Stations; R_earth = R_earth)
+    
+    # Travel-time predictions (includes optional re-integration along path)
+    println("Starting shortest path calculations")
+    tf_reverse ? println("stations -> events...") : println("events -> stations...")
+
+    num_paths = sum(length, values(itinerary))
+    ttimes, dist = zeros(num_paths), zeros(num_paths)
+    n, num_src = 0, length(itinerary)
+    for (i_start, destinations) in itinerary
+        x_start = SVector(start_points[i_start])
+        D = initialize_dijkstra(G, x_start; phase = phase, length_0 = length_0, pred = pred)
+        @time dijkstra!(D, G; phase = phase)
+
+        for (k_pth, j_end) in destinations
+            x_end = SVector(end_points[j_end])
+            t_min, xyz_path, _ = get_path(D, G, x_end; phase = phase, length_0 = length_0)
+            dist[k_pth] = return_path_length(xyz_path; path_length = 0.0)
+            if dl > 0.0
+                t_min, _ = refine_path(G, xyz_path, dl; phase=phase, dist=length_0, min_vert=min_vert)
+            end
+            ttimes[k_pth] = t_min
+        end
+        n += 1
+        println("Finished initialisation point " * string(n) * " of " * string(num_src) * ".")
+    end
+    
+    return ttimes, dist
+end
+function shortest_paths(G, itinerary, start_points, end_points;
+    phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0, dl = 0.0, min_vert = 2)
+
+    num_paths = sum(length, values(itinerary))
+    path_lengths, total_distance = zeros(num_paths), zeros(num_paths)
+    n, num_src = 0, length(itinerary)
+    for (i_start, destinations) in itinerary
+        x_start = SVector(start_points[i_start])
+        D = initialize_dijkstra(G, x_start; phase = phase, length_0 = length_0, pred = pred)
+        @time dijkstra!(D, G; phase = phase)
+
+        for (k_pth, j_end) in destinations
+            x_end = SVector(end_points[j_end])
+            t_min, xyz_path, _ = get_path(D, G, x_end; phase = phase, length_0 = length_0)
+            total_distance[k_pth] = return_path_length(xyz_path; path_length = 0.0)
+            if dl > 0.0
+                t_min, xyz_path = refine_path(G, xyz_path, dl; phase=phase, dist=length_0, min_vert=min_vert)
+            end
+            path_lengths[k_pth] = t_min
+        end
+
+        n += 1
+        println("Finished initialisation point " * string(n) * " of " * string(num_src) * ".")
+    end
+
+    return path_lengths, total_distance
+end
+function return_path_length(xyz_path; path_length = 0.0)
+    num_seg = size(xyz_path, 2) - 1
+    for k in 1:num_seg
+        dx, dy, dz = xyz_path[1,k+1] - xyz_path[1,k], xyz_path[2,k+1] - xyz_path[2,k], xyz_path[3,k+1] - xyz_path[3,k]
+        path_length += sqrt(dx^2 + dy^2 + dz^2)
+    end
+    return path_length
+end
+
+# Requires start_point to be a vector and end_points to be a vector of vectors
+function shortest_paths(G, start_point, end_points; phase = UnspecifiedPhase(), length_0 = 0.0, pred = 0)
+    D = initialize_dijkstra(G, start_point; phase = phase, length_0 = length_0, pred = pred)
+    @time dijkstra!(D, G; phase = phase)
+
+    num_paths = length(end_points)
+    path_lengths = Vector{Float64}(undef, num_paths)
+    path_coordinates = Vector{Array{Float64,2}}(undef, num_paths)
+    path_vertices = Vector{Int}(undef, num_paths)
+    for (i, x_end) in enumerate(end_points)
+        path_lengths[i], path_coordinates[i], path_vertices[i] = get_path(D, G, x_end; phase = phase, length_0 = length_0)
+    end
+
+    return path_lengths, path_coordinates, path_vertices
+end
+
 
 # Convenience function to make a graph
 function make_graph(lon_grid, lat_grid, elv_grid, v1D; r_neighbours = 5, leafsize = 10, grid_noise = 0.0, R_earth = 6371.0)
@@ -166,7 +300,7 @@ function cartesian_to_spherical(x, y, z)
     return azm, elv, r
 end
 function spherical_to_cartesian(azm, elv, r)
-    sinλ, cosλ = sincosd(azm)
-    sinϕ, cosϕ = sincosd(elv)
+    sinλ, cosλ = sincos(azm)
+    sinϕ, cosϕ = sincos(elv)
     return r*cosϕ*cosλ, r*cosϕ*sinλ, r*sinϕ
 end
