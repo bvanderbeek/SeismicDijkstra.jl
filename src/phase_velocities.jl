@@ -15,6 +15,7 @@ end
 struct BodySfast <: SeismicPhase end
 struct BodySslow <: SeismicPhase end
 struct BodySmean <: SeismicPhase end
+struct BodySiso <: SeismicPhase end
 
 # Isotropic Velocity
 struct IsotropicVelocity{T}
@@ -34,6 +35,9 @@ function phase_velocity(::BodyS, V::IsotropicVelocity)
     return V.vs
 end
 function phase_velocity(::BodySmean, V::IsotropicVelocity)
+    return V.vs
+end
+function phase_velocity(::BodySiso, V::IsotropicVelocity)
     return V.vs
 end
 
@@ -65,6 +69,35 @@ function phase_velocity(V::EllipticalVelocity, propagation_azimuth, propagation_
     cosθ = symmetry_axis_cosine(sym_azm, sym_elv, propagation_azimuth, propagation_elevation)
     dv = V.f*V.v_mean
     return V.v_mean + 2.0*dv*cosθ*cosθ - dv
+end
+
+# UNFINISHED! Intended to deprecate ThomsenVelocity and use faster symmetry axis vector parameterisation
+# SYMMETRY AXIS VECTOR IS ONLY FASTER FOR P: For S, a simple dot product is not sufficient
+struct WeakHexagonalThomsenVelocity{T,A}
+    alpha::T
+    beta::T
+    epsilon::T
+    delta::T
+    gamma::T
+    symmetry::A
+end
+# Outer Constructors
+function WeakHexagonalThomsenVelocity(alpha, beta, epsilon, delta, gamma, azm, elv)
+    CI = CartesianIndices(size(alpha))
+    symmetry = zeros(eltype(alpha), 3, size(alpha)...)
+    for n in eachindex(azm)
+        sinλ, cosλ = sincos(azm[n])
+        sinϕ, cosϕ = sincos(elv[n])
+        jkl = CI[n]
+        symmetry[1,jkl], symmetry[2,jkl], symmetry[3,jkl] = cosϕ*cosλ, cosϕ*sinλ, sinϕ
+    end
+    return WeakHexagonalThomsenVelocity(alpha, beta, epsilon, delta, gamma, symmetry)
+end
+# Indexing
+function Base.getindex(V::WeakHexagonalThomsenVelocity, index...)
+    α, β, ϵ, δ, γ = V.alpha[index...], V.beta[index...], V.epsilon[index...], V.delta[index...], V.gamma[index...]
+    s = @view V.symmetry[:, index...]
+    return WeakHexagonalThomsenVelocity(α, β, ϵ, δ, γ, s)
 end
 
 # Weak Hexagonal Anisotropy using Thomsen's parameters
@@ -136,6 +169,9 @@ function phase_velocity(::BodySmean, V::ThomsenVelocity, propagation_azimuth, pr
     vqs1 = V.beta*sqrt( 1.0 + 2.0*(q_αβ^2)*(V.epsilon - V.delta)*sinθ_2*cosθ_2 )
     vqs2 = V.beta*sqrt( 1.0 + 2.0*V.gamma*sinθ_2 )
     return 0.5*(vqs1 + vqs2)
+end
+function phase_velocity(::BodySiso, V::ThomsenVelocity, propagation_azimuth, propagation_elevation)
+    return V.beta*sqrt( 1.0 + (2/3)*V.gamma + (2/15)*((V.alpha^2)/(V.beta^2))*(V.epsilon - V.delta) )
 end
 
 #############
